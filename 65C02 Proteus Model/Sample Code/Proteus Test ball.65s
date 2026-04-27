@@ -1,0 +1,287 @@
+; ==============================================================================
+; Project:       SYSMON65 
+; File:          Proteus Test ball.65s
+; Description:   Hardware verification test for the V9938/TMS9918 VDP. 
+;                Initializes Graphic Mode 1 (G1) and runs a tile-based physics 
+;                engine to bounce a custom 8x8 ball graphic around the screen.
+;
+; Version:       2.25 (Bug Fixes applied)
+; Date:          April 2026
+; Author:        Joe DiMeglio
+; Project Home:  https://github.com/jdimeglio/6502-Monitor
+; ==============================================================================
+
+; ------------------------------------------------------------------------------
+; Hardware Addresses
+; ------------------------------------------------------------------------------
+VIA             = $A800             ; 6522 VIA Base
+VIDEO           = $A900             ; V9938 VDP Base
+ACIA            = $AF00             ; 6551/6850 ACIA Base
+
+VDP_VRAM        = VIDEO             ; Port $A900: VRAM Read/Write
+VDP_REG         = VIDEO + 1         ; Port $A901: Register / Command Setup
+
+; ------------------------------------------------------------------------------
+; Zero Page Variables (Physics Engine)
+; ------------------------------------------------------------------------------
+X_COORD         = $00               ; Current X position on the 32x24 grid
+Y_COORD         = $01               ; Current Y position on the 32x24 grid
+VEL_X           = $02               ; X Velocity (1 = Right, $FF = Left)
+VEL_Y           = $03               ; Y Velocity (1 = Down, $FF = Up)
+
+                .OPT proc65C02,swapbin
+                *= $E000            ; ROM Start Address
+
+; ==============================================================================
+; SYSTEM BOOT
+; ==============================================================================
+RESET           sei                 ; Disable interrupts
+                ldx   #$ff              
+                txs                 ; Initialize Stack Pointer
+                
+                lda   #$15          ; Init ACIA (8N1, /16 clock)
+                sta   ACIA              
+
+                ldy   #$00              
+PRINT_BOOT      lda   MSG_BOOT,y    ; Print Boot Message to Serial
+                beq   INIT_VDP          
+                jsr   WRITECHR          
+                iny                     
+                bne   PRINT_BOOT    
+
+; ==============================================================================
+; VDP INITIALIZATION (GRAPHIC MODE 1)
+; ==============================================================================
+INIT_VDP        
+                lda   VDP_REG       ; Read Status to clear VDP address flip-flop
+
+                ; 1. WIPE REGISTERS 0-7 TO $00 (Safe MSX1 Init)
+                ldx   #$00
+WIPE_REGS       lda   #$00              
+                sta   VDP_REG           
+                txa                     
+                ora   #$80          ; Set MSB for Register Write
+                sta   VDP_REG           
+                inx
+                cpx   #8            ; Loop 8 times (R0-R7)     
+                bne   WIPE_REGS
+
+                ; 2. HARDCODE SETUP REGISTERS FOR GRAPHIC MODE 1 (G1)
+                ; G1 provides a 32x24 grid of 8x8 pixel characters.
+                lda   #$00          ; R0: Normal operation
+                sta   VDP_REG
+                lda   #$80              
+                sta   VDP_REG
+
+                lda   #$C0          ; R1: Mode G1 (Bit 6), 16K RAM, Display ON (Bit 5)
+                sta   VDP_REG
+                lda   #$81              
+                sta   VDP_REG
+
+                lda   #$02          ; R2: Name Table (Screen Grid) at $0800
+                sta   VDP_REG
+                lda   #$82              
+                sta   VDP_REG
+
+                lda   #$80          ; R3: Color Table at $2000 (0x80 * 0x40 = 0x2000)
+                sta   VDP_REG
+                lda   #$83              
+                sta   VDP_REG
+
+                lda   #$00          ; R4: Pattern Table (Character Graphics) at $0000
+                sta   VDP_REG
+                lda   #$84              
+                sta   VDP_REG
+
+                lda   #$F4          ; R7: Backdrop Color (White FG = F, Dark Blue BG = 4)
+                sta   VDP_REG
+                lda   #$87              
+                sta   VDP_REG
+
+                ; 3. CLEAR 16KB VRAM TO $00 (Blanks screen and wipes patterns)
+                lda   #$00
+                sta   VDP_REG
+                lda   #$40          ; VRAM Address $0000 + Write Flag ($40)
+                sta   VDP_REG
+                
+                ldx   #$40          ; 64 pages of 256 bytes = 16KB
+                ldy   #$00
+CLEAR_VRAM      lda   #$00
+                sta   VDP_VRAM      ; Write $00 to VRAM
+                nop                 ; Hardware timing delay
+                iny
+                bne   CLEAR_VRAM
+                dex
+                bne   CLEAR_VRAM
+
+                ; 4. FILL COLOR TABLE ($2000)
+                ; In G1, 32 bytes define the colors for all 256 characters (1 byte per 8 chars).
+                lda   #$00
+                sta   VDP_REG
+                lda   #$60          ; VRAM Address $2000 + Write Flag ($40) = $60
+                sta   VDP_REG
+                ldx   #32           ; 32 color group bytes
+FILL_COLOR      lda   #$F4          ; White Foreground ($F), Dark Blue Background ($4)
+                sta   VDP_VRAM
+                nop
+                dex
+                bne   FILL_COLOR
+
+                ; 5. UPLOAD BALL TILE TO PATTERN 1 (Base $0000 + $08 offset)
+                lda   #$08          ; Lower byte of VRAM address
+                sta   VDP_REG
+                lda   #$40          ; Address $0008 + Write Flag ($40)
+                sta   VDP_REG
+                ldx   #$00
+LOAD_SPRITE     lda   BALL_PATTERN,x
+                sta   VDP_VRAM
+                nop
+                inx
+                cpx   #$08          ; 8 bytes per character
+                bne   LOAD_SPRITE
+
+                ; 6. INIT PHYSICS (Grid coordinates)
+                lda   #15           ; Start X (Middle of 32 columns)
+                sta   X_COORD
+                lda   #11           ; Start Y (Middle of 24 rows)
+                sta   Y_COORD
+                lda   #$01          ; Set initial velocities to +1
+                sta   VEL_X
+                sta   VEL_Y
+
+                ldy   #$00              
+PRINT_DONE      lda   MSG_DONE,y    ; Print Success Message to Serial
+                beq   MAIN_LOOP          
+                jsr   WRITECHR         
+                iny                     
+                bne   PRINT_DONE 
+
+; ==============================================================================
+; MAIN GAME LOOP
+; ==============================================================================
+
+MAIN_LOOP       
+                ; 0. WAIT FOR VBLANK (Locks game to 60 FPS, prevents flicker)
+WAIT_VBLANK     lda   VDP_REG           ; Read VDP Status Register 0
+                bpl   WAIT_VBLANK       ; Bit 7 is the VBLANK flag. Loop until it is 1 (Minus)
+
+                ; 1. ERASE OLD BALL
+                lda   #$00              ; Character 0 (Space)
+                jsr   DRAW_TILE
+
+                ; 2. UPDATE X AXIS
+                lda   X_COORD
+                clc
+                adc   VEL_X
+                cmp   #32               
+                bcc   SAVE_X            
+                lda   VEL_X             
+                eor   #$FE              ; Toggle velocity
+                sta   VEL_X
+                lda   X_COORD           
+SAVE_X          sta   X_COORD          
+
+                ; 3. UPDATE Y AXIS
+                lda   Y_COORD
+                clc
+                adc   VEL_Y
+                cmp   #24               
+                bcc   SAVE_Y
+                lda   VEL_Y             
+                eor   #$FE              
+                sta   VEL_Y
+                lda   Y_COORD
+SAVE_Y          sta   Y_COORD
+
+                ; 4. DRAW NEW BALL
+                lda   #$01              ; Character 1 (Ball)
+                jsr   DRAW_TILE
+
+                ; (Removed jsr DELAY - VBLANK handles our pacing now!)
+                jmp   MAIN_LOOP
+
+; ==============================================================================
+; SUBROUTINES
+; ==============================================================================
+
+; ------------------------------------------------------------------------------
+; DRAW_TILE: Uses the ROW_LO/ROW_HI lookup table to find the memory address 
+;            of the current Y row, adds the X offset, and plots the tile.
+;            Input: Accumulator = Character ID to draw.
+; ------------------------------------------------------------------------------
+DRAW_TILE       pha                     ; Save Character to stack
+                ldy   Y_COORD           
+                
+                lda   ROW_LO,y          
+                clc
+                adc   X_COORD           
+                sta   VDP_REG           ; Send Low Byte to VDP
+                
+                nop                     ; DELAY: Let the VDP process the Low Byte
+                nop
+
+                lda   ROW_HI,y          
+                ora   #$40              
+                sta   VDP_REG           ; Send High Byte to VDP
+                
+                nop                     ; DELAY: Let the VDP process the High Byte
+                nop
+
+                pla                     
+                sta   VDP_VRAM          ; Write to screen
+                rts
+
+; ------------------------------------------------------------------------------
+; SERIAL TRANSMIT
+; ------------------------------------------------------------------------------
+WRITECHR        pha                     
+.tx_loop        lda   ACIA          ; Read ACIA Status  
+                and   #$02          ; Is Transmit Register Empty?
+                beq   .tx_loop      ; Wait if not
+                pla                     
+                sta   ACIA+1        ; Send char
+                rts                     
+
+; ------------------------------------------------------------------------------
+; DELAY
+; ------------------------------------------------------------------------------
+DELAY           ldy   #$60          ; Speed Control (Increase for slower animation)
+DELAY_INNER     dey
+                bne   DELAY_INNER         
+                rts
+
+; ==============================================================================
+; DATA TABLES
+; ==============================================================================
+MSG_BOOT        .str  "Booting VDP - please wait...",13,10,0
+MSG_DONE        .str  "Tile Engine Running!",13,10,0
+
+; Custom 8x8 Ball Sprite (Mapped to Character $01)
+BALL_PATTERN    .byte %00111100
+                .byte %01111110
+                .byte %11111111
+                .byte %11111111
+                .byte %11111111
+                .byte %11111111
+                .byte %01111110
+                .byte %00111100
+
+; ------------------------------------------------------------------------------
+; VRAM Address Lookup Table for Rows (0 to 23)
+; Base Address is $0800. Each row is 32 bytes ($20) wide.
+; ------------------------------------------------------------------------------
+ROW_LO          .byte $00, $20, $40, $60, $80, $A0, $C0, $E0
+                .byte $00, $20, $40, $60, $80, $A0, $C0, $E0
+                .byte $00, $20, $40, $60, $80, $A0, $C0, $E0
+
+ROW_HI          .byte $08, $08, $08, $08, $08, $08, $08, $08
+                .byte $09, $09, $09, $09, $09, $09, $09, $09
+                .byte $0A, $0A, $0A, $0A, $0A, $0A, $0A, $0A
+
+; ==============================================================================
+; HARDWARE VECTORS
+; ==============================================================================
+                *=   $fffa        
+NMIVECTOR       .word $e000           
+RESETVECTOR     .word $e000             
+IRQVECTOR       .word $e000

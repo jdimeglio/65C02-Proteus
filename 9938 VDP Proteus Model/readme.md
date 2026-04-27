@@ -1,80 +1,68 @@
 ```
-  ████████  ██████████  ████████   ████████ 
- ███░░░░███░███░░░░░░█ ███░░░░███ ███░░░░███
-░███   ░░░ ░███     ░ ░░░    ░███░░░    ░███
-░█████████ ░█████████    ███████    ███████ 
-░███░░░░███░░░░░░░░███  ███░░░░    ███░░░░  
-░███   ░███ ███   ░███ ███      █ ███      █
-░░████████ ░░████████ ░██████████░██████████
- ░░░░░░░░   ░░░░░░░░  ░░░░░░░░░░ ░░░░░░░░░░ 
-               
-                                 
+ █████   █████  ████████   ████████   ████████   ████████  
+░░███   ░░███  ███░░░░███ ███░░░░███ ███░░░░███ ███░░░░███ 
+ ░███    ░███ ░███   ░███░███   ░███░░░    ░███░███   ░███ 
+ ░███    ░███ ░░█████████░░█████████   ██████░ ░░████████  
+ ░░███   ███   ░░░░░░░███ ░░░░░░░███  ░░░░░░███ ███░░░░███ 
+  ░░░█████░    ███   ░███ ███   ░███ ███   ░███░███   ░███ 
+    ░░███     ░░████████ ░░████████ ░░████████ ░░████████  
+     ░░░       ░░░░░░░░   ░░░░░░░░   ░░░░░░░░   ░░░░░░░░   
+                                                           
+                        
 ```
-# MOS 6522 VIA - Proteus VSM Model
+# Yamaha V9938 VDP - Proteus VSM Model
 
-![Version](https://img.shields.io/badge/version-v1.0-blue) ![Proteus](https://img.shields.io/badge/Proteus-8.x-orange) ![C++](https://img.shields.io/badge/Language-C++-green)
+![Version](https://img.shields.io/badge/version-v1.1-blue) ![Proteus](https://img.shields.io/badge/Proteus-8.x-orange) ![C++](https://img.shields.io/badge/Language-C++-green)
 
 ## Overview
-This is my cycle-accurate **MOS 6522 Versatile Interface Adapter (VIA)** model for the Proteus Design Suite. 
+This repository contains a custom **Yamaha V9938 Video Display Processor (VDP)** model for the Proteus Design Suite. 
 
-The standard Proteus library lacks comprehensive support for many 6502-family peripheral chips. This bridges that gap, allowing me to test 6502 assembly code, hardware interrupts, and parallel I/O routines within the Proteus simulation environment before deploying to real physical hardware. 
+The V9938 is a retro graphics chip (famous for powering the MSX2 computer standard). Because standard Proteus lacks complex bitmapped video generators, this VSM DLL allows you to integrate a fully functioning VDP into your 6502/Z80 SBC simulations. It provides real-time visual output via a native Windows popup, allowing you to test video initialization routines, palette loading, and hardware-accelerated drawing commands directly in Proteus. ie: connect it to my RGB Screen model.
 
-This model was specifically developed to my **SYSMON65** SBC (Single Board Computer) project.
+This model was specifically used to add video to the **SYSMON65** SBC project.
 
-## Key Technical Features
-- **Cycle-Accurate Timing:** Evaluates internal timers and register latches strictly on the falling edge of the `PHI2` system clock.
-- **Bi-Directional Parallel Ports:** Fully supports `DDRA` and `DDRB` (Data Direction Registers) for precise pin-by-pin input/output control on Port A and Port B.
-- **Hardware Timers:** Supports 16-bit decrementing timers (T1 and T2). Timer 1 fully implements both **One-Shot** and **Free-Running (Continuous)** modes via the Auxiliary Control Register (ACR).
-- **Interrupt Handling:** Complete implementation of the Interrupt Flag Register (IFR) and Interrupt Enable Register (IER), properly pulling the `$IRQ$` pin low when enabled conditions are met.
+## Current Capabilities & Supported Modes
+The V9938 is a complex chip.
 
-## Register Memory Map
-The 6522 occupies 16 bytes of memory. The specific base address depends on the hardware decoding (e.g., `$A600`, `$AE00`).
 
-| Offset | Register | Description |
-| :--- | :--- | :--- |
-| `+ $00` | **ORB/IRB** | Port B Output/Input Register |
-| `+ $01` | **ORA/IRA** | Port A Output/Input Register |
-| `+ $02` | **DDRB** | Data Direction Register B |
-| `+ $03` | **DDRA** | Data Direction Register A |
-| `+ $04` | **T1C-L** | Timer 1 Counter (Low) / Latch Write |
-| `+ $05` | **T1C-H** | Timer 1 Counter (High) |
-| `+ $06` | **T1L-L** | Timer 1 Latch (Low) |
-| `+ $07` | **T1L-H** | Timer 1 Latch (High) |
-| `+ $08` | **T2C-L** | Timer 2 Counter (Low) / Latch Write |
-| `+ $09` | **T2C-H** | Timer 2 Counter (High) |
-| `+ $0A` | **SR** | Shift Register *(See Roadmap)* |
-| `+ $0B` | **ACR** | Auxiliary Control Register |
-| `+ $0C` | **PCR** | Peripheral Control Register *(See Roadmap)* |
-| `+ $0D` | **IFR** | Interrupt Flag Register |
-| `+ $0E` | **IER** | Interrupt Enable Register |
-| `+ $0F` | **ORA/IRA** | Same as `$01` without handshake clearing |
+### ✅ Currently Implemented:
+* **Text 1 (T1):** 40 x 24 character legacy text mode (2 colors). 
+  * *Note on T1:* Uses a 6x8 pixel character matrix. Custom fonts must be left-aligned, as the VDP hardware strictly renders bits 7 through 2 and ignores bits 1 and 0.
+
+
+## Core Functions
+- **Proteus Graphics Window:** outputs to RGB, where my RGB Display (RGBOUT) model will display it to screen .
+- **VRAM Addressing:** Supports up to 128KB of dedicated VRAM, managed completely by the VDP. 
+- **Custom Palette Engine:** Full support for the V9938's 9-bit RGB palette (512 possible colors).
+- **Hardware Command Engine (Blitter):** Emulates hardware-accelerated VRAM-to-VRAM copy commands, line drawing, and logical operations (AND, OR, XOR).
+
+## Known Limitations & Quirks
+Because this is a simulation running inside a larger EDA tool, there are specific limitations to be aware of:
+
+1. **Simulation Speed vs. Real-Time:** The simulation will scale its speed down to maintain cycle accuracy. Your code will execute perfectly, but run in "slow motion."
+2. **Window Redraw Decoupling:** To prevent Proteus from freezing, the Windows popup does not redraw on every single pixel change. The screen buffer is updated silently and pushed to the UI during the simulated Vertical Blanking (VBLANK) interval.
+3. **Text Mode 1 Font Quirk:** When using the legacy 40-column Text Mode 1, characters are 6x8 pixels, not 8x8. The VDP hardware strictly renders bits 7 through 2 of your pattern data and **ignores bits 1 and 0**. Custom fonts must be shifted to the left to display correctly without clipping.
 
 ## Installation & Setup
-Ive copied all my MOS family custom components into a single `MOS.LIB`.
+To make installation as simple as possible, this project is structured to mirror your Proteus installation folders.
 
-1. Copy the contents of this repository's `MODELS` folder (e.g., `6522.dll`) to your Proteus `MODELS` directory.
-2. Copy the contents of this repository's `LIBRARY` folder (`MOS.LIB`) to your Proteus `LIBRARY` directory.
-3. Restart Proteus; so it will automatically generate the required `.IDX` file for the new library.
-4. Search the Component Picker (P) for `6522` and look for the component associated with the `MOS` library.
-
-## Hardware Wiring Notes
-For the model to successfully read and write to your virtual CPU bus, ensure the following pins are routed correctly:
-* **PHI2:** Must be connected to your system's clock oscillator.
-* **RW:** Must be tied to the 6502 R/W line.
-* **Chip Selects:** The model evaluates selection as: `CS1 == HIGH` AND `$CS2$ == LOW`. Ensure your address decoding logic (e.g., 74LS138) matches these polarities.
-* **RS0 - RS3:** Must be connected to the CPU's Address lines `A0` through `A3`.
+1. Copy the contents of this repository's `MODELS` folder (e.g., `V9938.dll`) to your Proteus `MODELS` directory.
+2. Copy the contents of this repository's `LIBRARY` folder (e.g., `MOS.LIB` ) to your Proteus `LIBRARY` directory.
+3. Restart Proteus; it will automatically generate the required `.IDX` file.
+4. Search the Component Picker (P) for `V9938`.
 
 ## Roadmap
-- [x] Port A / Port B Parallel I/O
-- [x] Timer 1 & Timer 2 Execution
-- [x] IFR/IER Interrupt Generation
-- [ ] Shift Register (SR) Implementation
-- [ ] CB1/CB2 and CA1/CA2 Edge-Triggered Handshaking (PCR)
+- [x] Basic I/O Interface & Status Registers
+- [x] TMS9918 Legacy Graphics & Text Modes
+- [ ] V9938 G4-G7 256-Color Bitmap Modes
+- [ ] Hardware Command Engine (BitBlt)
+- [ ] Hardware Sprites (Mode 2)
 
 ---
-
-Version: 1.0  
+Version: 1.1  
 Date: April 2026
 
 **Author:** Joe DiMeglio  
-**Project Home:** [https://github.com/jdimeglio/MOS-6522-Proteus](https://github.com/jdimeglio/MOS-6522-Proteus) 
+**Project Home:** [jdimeglio/65C02-Proteus](https://github.com/jdimeglio/65C02-Proteus/tree/main/9938%20VDP%20Proteus%20Model)  
+*(Located in the `V9938 Proteus Model` directory)*
+

@@ -77,4 +77,4 @@ Version: 1.0
 Date: April 2026
 
 **Author:** Joe DiMeglio  
-**Project Home:** [https://github.com/jdimeglio/MOS-6522-Proteus](https://github.com/jdimeglio/MOS-6522-Proteus) 
+**Project Home:** [https://github.com/jdimeglio/MOS-6522-Proteus](https://github.com/jdimeglio/65C02-Proteus/tree/main/6522%20Proteus%20Model) 
