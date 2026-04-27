@@ -1,0 +1,146 @@
+; ==============================================================================
+; Project:       SYSMON65 
+; File:          VIA_ACIA_Test.65s
+; Description:   Hardware verification test for the custom MOS 6522 VIA and 
+;                MOS 6850 ACIA models in the Proteus VSM environment. 
+;                This code toggles LEDs on the VIA Port A while simultaneously 
+;                broadcasting status updates to the Serial ANSI Terminal.
+;
+; Version:       1.0
+; Date:          April 2026
+; Author:        Joe DiMeglio
+; Project Home:  https://github.com/jdimeglio/65C02-Proteus
+; ==============================================================================
+
+; ------------------------------------------------------------------------------
+; Hardware Addresses (Based on 74LS138 decoding)
+; ------------------------------------------------------------------------------
+ACIA_CTRL   = $AF00         ; ACIA Control/Status Register
+ACIA_DATA   = $AF01         ; ACIA Transmit/Receive Data Register
+VIA_ORB     = $AE00         ; 6522 Output Register Port B
+VIA_ORA     = $AE01         ; 6522 Output Register Port A
+VIA_DDRA    = $AE03         ; 6522 Data Direction Register A
+
+; ------------------------------------------------------------------------------
+; Zero Page Pointers
+; ------------------------------------------------------------------------------
+PTR_LO      = $00           ; Low byte for string pointer
+PTR_HI      = $01           ; High byte for string pointer
+
+            .OPT proc65C02,swapbin
+            *= $E000        ; Assuming PROM starts at $E000
+
+; ==============================================================================
+; SYSTEM BOOT & INITIALIZATION
+; ==============================================================================
+RESET:      sei             ; Disable interrupts during boot
+            cld             ; Clear decimal mode (standard 6502 init)
+            ldx #$FF        ; Initialize Stack Pointer to $01FF
+            txs
+
+            ; 1. Initialize ACIA (6850)
+            lda #$03        ; %00000011 - Master Reset command for 6850 ACIA
+            sta ACIA_CTRL   
+            lda #$15        ; %00010101 - 8 Data Bits, No Parity, 1 Stop Bit, /16 Clock
+            sta ACIA_CTRL   ; Configures ACIA for standard 9600 baud operation
+
+            ; 2. Initialize VIA (6522) Port A
+            lda #$FF        ; Load all 1s (%11111111)
+            sta VIA_DDRA    ; Set Data Direction Register A so all 8 pins are Outputs
+
+            ; 3. Print Welcome Message to Terminal
+            lda #<MSG_START ; Load low byte of the boot message address
+            sta PTR_LO
+            lda #>MSG_START ; Load high byte of the boot message address
+            sta PTR_HI
+            jsr PRINT_STR   ; Call string printing subroutine
+
+; ==============================================================================
+; MAIN EXECUTION LOOP
+; ==============================================================================
+MAIN_LOOP:
+            ; --- Trigger LED 0 ---
+            lda #<MSG_L0    ; Set pointer to LED 0 message
+            sta PTR_LO
+            lda #>MSG_L0
+            sta PTR_HI
+            jsr PRINT_STR   ; Print "PA0 High" to terminal
+            
+            lda #%00000001  ; Bit 0 is High, all others Low
+            sta VIA_ORA     ; Output to Port A (Turns on LED 0)
+            jsr DELAY       ; Wait so we can see the LED light up
+
+            ; --- Trigger LED 1 ---
+            lda #<MSG_L1    ; Set pointer to LED 1 message
+            sta PTR_LO
+            lda #>MSG_L1
+            sta PTR_HI
+            jsr PRINT_STR   ; Print "PA1 High" to terminal
+
+            lda #%00000010  ; Bit 1 is High, all others Low
+            sta VIA_ORA     ; Output to Port A (Turns on LED 1)
+            jsr DELAY       ; Wait
+
+            jmp MAIN_LOOP   ; Repeat indefinitely
+
+; ==============================================================================
+; SUBROUTINES
+; ==============================================================================
+
+; ------------------------------------------------------------------------------
+; PRINT_STR: Reads a null-terminated string using Zero Page indirect addressing 
+;            and sends it character-by-character to the ACIA.
+; ------------------------------------------------------------------------------
+PRINT_STR:  ldy #$00        ; Reset Y index to 0
+.loop:      lda (PTR_LO),y  ; Load character from memory address (PTR + Y)
+            beq .done       ; If character is $00 (Null), we are done printing
+            jsr ACIA_TX     ; Send the character in Accumulator to the ACIA
+            iny             ; Move to next character
+            jmp .loop       ; Repeat
+.done:      rts             ; Return from subroutine
+
+; ------------------------------------------------------------------------------
+; ACIA_TX: Transmits a single character (in Accumulator) over serial.
+;          Blocks execution until the ACIA is ready to transmit.
+; ------------------------------------------------------------------------------
+ACIA_TX:    pha             ; Push the character to the stack to save it
+.wait:      lda ACIA_CTRL   ; Read ACIA Status Register
+            and #$02        ; Mask Bit 1 (TDRE - Transmit Data Register Empty)
+            beq .wait       ; If 0, register is full, keep waiting
+            pla             ; Pull the character back from the stack
+            sta ACIA_DATA   ; Write to ACIA Data Register (Triggers transmission)
+            rts             ; Return from subroutine
+
+; ------------------------------------------------------------------------------
+; DELAY: A simple nested loop to waste CPU cycles, creating a visible pause.
+; ------------------------------------------------------------------------------
+DELAY:      ldy #$80        ; Outer loop counter (reduced for sim snappiness)
+.yloop:     ldx #$20        ; Inner loop counter
+.xloop:     dex             ; Decrement X
+            bne .xloop      ; If X is not 0, branch to .xloop
+            dey             ; Decrement Y
+            bne .yloop      ; If Y is not 0, branch to .yloop
+            rts             ; Return from subroutine
+
+; ==============================================================================
+; DATA SECTION (Strings & ANSI Escape Codes)
+; ==============================================================================
+; Note: $1B is the ASCII ESC character. $0D $0A is CR/LF (Carriage Return / Line Feed).
+
+MSG_START:  .byte $1B, "[2J"        ; ANSI: Clear Screen
+            .byte $1B, "[H"         ; ANSI: Move cursor to Home (1,1)
+            .byte $1B, "[36m"       ; ANSI: Set text color to Cyan
+            .byte "SYSTEM BOOT: VIA/ACIA Link Established.", $0D, $0A, 0
+
+MSG_L0:     .byte $1B, "[32m"       ; ANSI: Set text color to Green
+            .byte "VIA Output: PA0 High", $0D, $0A, 0
+
+MSG_L1:     .byte $1B, "[33m"       ; ANSI: Set text color to Yellow
+            .byte "VIA Output: PA1 High", $0D, $0A, 0
+
+; ==============================================================================
+; HARDWARE VECTORS (Must be at the very end of ROM: $FFFA - $FFFF)
+; ==============================================================================
+            *= $FFFC
+            .word RESET     ; $FFFC/D: System Reset Vector
+            .word RESET     ; $FFFE/F: IRQ/BRK Vector (Point to reset for safety)

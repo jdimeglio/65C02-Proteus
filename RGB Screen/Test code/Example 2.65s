@@ -1,0 +1,302 @@
+; ==============================================================================
+; Project:       SYSMON65 
+; File:          Proteus Text 6502.65s
+; Description:   V9938/TMS9918 VDP Initialization and Text Mode Demo.
+;                Safely boots the VDP, clears VRAM, loads a custom 8x8 font, 
+;                and draws a stylized, framed "SYSMON65" boot logo.
+;
+; Version:       1.1 (Added Custom Box Graphics & Fixes)
+; Author:        Joe DiMeglio
+; Project Home:  https://github.com/jdimeglio/65C02-Proteus
+; ==============================================================================
+
+; ------------------------------------------------------------------------------
+; Hardware Addresses
+; ------------------------------------------------------------------------------
+VIA             = $A800             ; 6522 VIA Base
+VIDEO           = $A900             ; V9938 Base Address
+ACIA            = $AF00             ; 6551/6850 ACIA Base
+
+VDP_VRAM        = VIDEO             ; Port $A900: VRAM Read/Write
+VDP_REG         = VIDEO + 1         ; Port $A901: Register / Command Setup
+
+; ------------------------------------------------------------------------------
+; Zero Page Pointers
+; ------------------------------------------------------------------------------
+STR_PTR_LO      = $00               ; Low byte for terminal printing
+STR_PTR_HI      = $01               ; High byte for terminal printing
+
+                .OPT proc65C02,swapbin
+                *= $E000            ; ROM Start
+
+; ==============================================================================
+; SYSTEM BOOT & ACIA INIT
+; ==============================================================================
+RESET           sei                 ; Disable IRQs
+                ldx   #$ff              
+                txs                 ; Setup Stack Pointer
+                
+                lda   #$15          ; Init ACIA (IRQ OFF, 8N1, /16)
+                sta   ACIA              
+
+                lda   #<MSG_BOOT    ; Print Boot Message to Serial Terminal
+                sta   STR_PTR_LO
+                lda   #>MSG_BOOT
+                sta   STR_PTR_HI
+                jsr   PRINT_STR
+
+; ==============================================================================
+; VDP INITIALIZATION
+; ==============================================================================
+INIT_VDP        
+                lda   VDP_REG       ; Read Status to clear VDP address flip-flop
+
+                ; 1. WIPE REGISTERS R0-R7 TO $00 
+                ; (Only 0-7 are wiped to prevent crashing the MSX2 palette engine)
+                ldx   #$00
+WIPE_REGS       lda   #$00          ; Data to write
+                sta   VDP_REG           
+                txa                     
+                ora   #$80          ; Set high bit to indicate Register Write
+                sta   VDP_REG           
+                inx
+                cpx   #8            ; 8 registers (R0 - R7)
+                bne   WIPE_REGS
+
+                ; 2. HARDCODE SETUP REGISTERS (TEXT MODE 1, 40-COLUMN)
+                ; --- R0 ---
+                lda   #$00          ; Normal operation
+                sta   VDP_REG
+                lda   #$80          ; Write to R0
+                sta   VDP_REG
+                ; --- R1 ---
+                lda   #$D0          ; TEXT MODE 1 ($D0), Display ON, 16K VRAM
+                sta   VDP_REG
+                lda   #$81          ; Write to R1
+                sta   VDP_REG
+                ; --- R2 ---
+                lda   #$02          ; Name Table at $0800
+                sta   VDP_REG
+                lda   #$82          ; Write to R2
+                sta   VDP_REG
+                ; --- R3 --- (Ignored in T1)
+                lda   #$00              
+                sta   VDP_REG
+                lda   #$83          ; Write to R3
+                sta   VDP_REG
+                ; --- R4 ---
+                lda   #$00          ; Pattern Table at $0000
+                sta   VDP_REG
+                lda   #$84          ; Write to R4
+                sta   VDP_REG
+                ; --- R7 ---
+                lda   #$E4          ; Color: Cyan Foreground (14), Dark Blue BG (4)
+                sta   VDP_REG
+                lda   #$87          ; Write to R7
+                sta   VDP_REG
+
+                lda   #<MSG_REG     ; Print Register Msg
+                sta   STR_PTR_LO
+                lda   #>MSG_REG
+                sta   STR_PTR_HI
+                jsr   PRINT_STR
+
+                ; 3a. CLEAR ENTIRE VRAM (Patterns & Colors) TO $00
+                lda   #$00
+                sta   VDP_REG
+                lda   #$40          ; VRAM Address $0000 + Write Flag ($40)
+                sta   VDP_REG
+                ldx   #$40          ; 64 pages (16KB)
+                ldy   #$00
+CLEAR_VRAM      lda   #$00          ; Fill with $00
+                sta   VDP_VRAM
+                nop                 ; Hardware timing delay
+                iny
+                bne   CLEAR_VRAM
+                dex
+                bne   CLEAR_VRAM
+
+                ; 3b. CLEAR NAME TABLE ($0800) TO ASCII SPACE ($20)
+                lda   #$00
+                sta   VDP_REG
+                lda   #$48          ; VRAM Address $0800 + Write Flag ($40) = $48
+                sta   VDP_REG
+                ldx   #$04          ; 4 pages = 1024 bytes (Covers the 960 byte screen)
+                ldy   #$00
+CLEAR_NAME      lda   #$20          ; ASCII Space ($20)
+                sta   VDP_VRAM
+                nop                     
+                iny
+                bne   CLEAR_NAME
+                dex
+                bne   CLEAR_NAME
+
+                lda   #<MSG_VRAM    ; Print VRAM Msg
+                sta   STR_PTR_LO
+                lda   #>MSG_VRAM
+                sta   STR_PTR_HI
+                jsr   PRINT_STR
+
+                ; 4. UPLOAD CUSTOM GRAPHICS & FONT
+                ; Base VRAM Address: $0008 (Char $01 pattern base)
+                lda   #$08              
+                sta   VDP_REG
+                lda   #$40          ; VRAM Address $0008 + Write
+                sta   VDP_REG
+                ldx   #$00
+LOAD_FONT       lda   ELEGANT_FONT,x
+                sta   VDP_VRAM
+                nop
+                inx
+                cpx   #104          ; 13 Custom Chars * 8 bytes = 104 bytes ($68)
+                bne   LOAD_FONT
+
+                lda   #<MSG_FONT    ; Print Font Msg
+                sta   STR_PTR_LO
+                lda   #>MSG_FONT
+                sta   STR_PTR_HI
+                jsr   PRINT_STR
+
+                ; 5. DRAW FRAMED LOGO (3 Rows of 10 characters)
+                ; Box is centered: Cols 15-24, Rows 10-12
+                
+                ; -- Draw Top Border (Row 10 starts at $099F) --
+                lda   #$9F          ; LSB
+                sta   VDP_REG
+                lda   #$49          ; MSB ($09) + Write ($40)
+                sta   VDP_REG
+                ldx   #$00
+.top_loop       lda   BOX_TOP,x
+                sta   VDP_VRAM
+                nop
+                inx
+                cpx   #10
+                bne   .top_loop
+
+                ; -- Draw Text Middle (Row 11 starts at $09C7) --
+                lda   #$C7          
+                sta   VDP_REG
+                lda   #$49          
+                sta   VDP_REG
+                ldx   #$00
+.mid_loop       lda   BOX_MID,x
+                sta   VDP_VRAM
+                nop
+                inx
+                cpx   #10
+                bne   .mid_loop
+
+                ; -- Draw Bottom Border (Row 12 starts at $09EF) --
+                lda   #$EF          
+                sta   VDP_REG
+                lda   #$49          
+                sta   VDP_REG
+                ldx   #$00
+.bot_loop       lda   BOX_BOT,x
+                sta   VDP_VRAM
+                nop
+                inx
+                cpx   #10
+                bne   .bot_loop
+
+                lda   #<MSG_LOGO    ; Print Logo Msg
+                sta   STR_PTR_LO
+                lda   #>MSG_LOGO
+                sta   STR_PTR_HI
+                jsr   PRINT_STR
+
+; ==============================================================================
+; CPU HALT
+; ==============================================================================
+HALT            jmp   HALT          ; Infinite loop, VDP renders independently
+
+; ==============================================================================
+; SUBROUTINES & TEXT MESSAGES
+; ==============================================================================
+
+WRITECHR        pha                     
+.tx_loop        lda   ACIA          ; Read ACIA Status
+                and   #$02          ; Transmit Data Register Empty?
+                beq   .tx_loop      ; If 0, wait
+                pla                     
+                sta   ACIA+1        ; Write to ACIA Data
+                rts                     
+
+PRINT_STR       ldy   #$00
+.str_loop       lda   (STR_PTR_LO),y
+                beq   .str_done
+                jsr   WRITECHR
+                iny
+                bne   .str_loop
+.str_done       rts
+
+MSG_BOOT        .str  "Elegant Booting...",13,10,0
+MSG_REG         .str  "Text Mode Set (Cyan/Blue)...",13,10,0
+MSG_VRAM        .str  "VRAM Space Cleared...",13,10,0
+MSG_FONT        .str  "Graphics & Font Loaded...",13,10,0
+MSG_LOGO        .str  "Logo Rendered. System Halt.",13,10,0
+
+; ==============================================================================
+; GRAPHICS DATA ARRAYS
+; ==============================================================================
+
+; The screen layout mapping for our framed logo
+BOX_TOP         .byte $08, $0C, $0C, $0C, $0C, $0C, $0C, $0C, $0C, $09
+BOX_MID         .byte $0D, $01, $02, $01, $03, $04, $05, $06, $07, $0D
+BOX_BOT         .byte $0A, $0C, $0C, $0C, $0C, $0C, $0C, $0C, $0C, $0B
+
+; ------------------------------------------------------------------------------
+; ELEGANT 6x8 FONT & GRAPHICS DATA (13 Chars * 8 Bytes = 104 Bytes)
+; NOTE: TMS9918 Text Mode 1 uses 6x8 characters. 
+; It ONLY renders Bits 7 through 2! Bits 1 and 0 are completely ignored.
+; ------------------------------------------------------------------------------
+ELEGANT_FONT
+                ; $01: 'S'
+                .byte %01111000, %11000000, %11000000, %01111000
+                .byte %00001100, %00001100, %01111000, %00000000
+                ; $02: 'Y'
+                .byte %11001100, %11001100, %01111000, %00110000
+                .byte %00110000, %00110000, %00110000, %00000000
+                ; $03: 'M'
+                .byte %11001100, %11111100, %11001100, %11001100
+                .byte %11001100, %11001100, %11001100, %00000000
+                ; $04: 'O'
+                .byte %01111000, %11001100, %11001100, %11001100
+                .byte %11001100, %11001100, %01111000, %00000000
+                ; $05: 'N'
+                .byte %11001100, %11101100, %11110100, %11001100
+                .byte %11001100, %11001100, %11001100, %00000000
+                ; $06: '6'
+                .byte %01111000, %11000000, %11000000, %11111000
+                .byte %11001100, %11001100, %01111000, %00000000
+                ; $07: '5'
+                .byte %11111100, %11000000, %11111000, %00001100
+                .byte %00001100, %11001100, %01111000, %00000000
+
+                ; === BOX DRAWING GRAPHICS (Perfectly aligned for 6x8) ===
+                ; $08: Top-Left Corner
+                .byte %00000000, %00000000, %00000000, %00111100
+                .byte %00110000, %00110000, %00110000, %00110000
+                ; $09: Top-Right Corner
+                .byte %00000000, %00000000, %00000000, %11110000
+                .byte %00110000, %00110000, %00110000, %00110000
+                ; $0A: Bottom-Left Corner
+                .byte %00110000, %00110000, %00110000, %00110000
+                .byte %00111100, %00000000, %00000000, %00000000
+                ; $0B: Bottom-Right Corner
+                .byte %00110000, %00110000, %00110000, %00110000
+                .byte %11110000, %00000000, %00000000, %00000000
+                ; $0C: Horizontal Thick Line
+                .byte %00000000, %00000000, %00000000, %11111100
+                .byte %11111100, %00000000, %00000000, %00000000
+                ; $0D: Vertical Thick Line
+                .byte %00110000, %00110000, %00110000, %00110000
+                .byte %00110000, %00110000, %00110000, %00110000
+
+; ==============================================================================
+; HARDWARE VECTORS
+; ==============================================================================
+                *=   $fffa        
+NMIVECTOR       .word $e000           
+RESETVECTOR     .word $e000             
+IRQVECTOR       .word $e000
