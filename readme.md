@@ -25,7 +25,7 @@ Each folder in this repository contains the C++ source code, compiled `.dll` mod
 | Directory | Description |
 | :--- | :--- |
 | **`6522 Proteus Model`** | **MOS 6522 VIA:** My Custom C++ model of the Versatile Interface Adapter. Handles parallel I/O and hardware timers essential for the 6502 ecosystem. |
-| **`65C02 Proteus Model`** | **CPU & Architecture Support:** Contains files, memory decoding logic, and simulation support structures for the core WDC 65C02 processor architecture. |
+| **`6502 Proteus Model`** | **CPU & Architecture Support:** Contains files, memory decoding logic, and simulation support structures for the core 6502 processor architecture. |
 | **`9938 VDP Proteus Model`** | **Yamaha V9938 VDP:** Custom model of the MSX2 Video Display Processor. Handles dedicated VRAM, hardware graphics rendering, and outputs discrete video timing signals. |
 | **`Protues LIB`** | **Schematic Symbols:** Contains the Proteus `.LIB` files. These are the visual schematic symbols and pin definitions that link to the compiled C++ DLLs. *(Note: Matches Proteus directory structure).* |
 | **`RGB Screen`** | **RGBOUT Monitor Simulator:** My custom VSM display module that acts as a physical CRT. It reads raw `PCLK`, `HSYNC`, `VSYNC`, and 3-bit Digital RGB signals from the VDP and paints them to a Windows UI popup with 2x2 integer scaling. |
